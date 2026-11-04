@@ -139,6 +139,12 @@ PLAYWRIGHT_MODULE=/path/to/playwright-core node tests/verify_viewer.cjs
 
 遇到资源缺失先检查 `--asset-root` 是否指向包含 `outputs/` 的根目录；出现 `Asset preflight failed` 按列出的文件修复；浏览器“运行失败”提示应结合开发者工具检查具体资源和错误。人物悬空或楼层空白需检查坐标、父级高度和相机目标，不能仅靠重新启动服务器判断已解决。
 
+## 作者与联系
+
+作者：[bosprimigenious](https://github.com/bosprimigenious)
+
+邮箱：[bosprimigenious@bupt.edu.cn](mailto:bosprimigenious@bupt.edu.cn)
+
 ## 许可与公开范围
 
 自有源码采用 [MIT 许可证](LICENSE)。随仓库提供的 Three.js 0.180.0 与 addons 保留其[原 MIT 许可证和署名](web/vendor/three/LICENSE)。详见[第三方声明](NOTICE.md)。
