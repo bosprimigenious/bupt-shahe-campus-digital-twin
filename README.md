@@ -29,7 +29,7 @@ git clone https://github.com/bosprimigenious/bupt-shahe-campus-digital-twin.git
 cd bupt-shahe-campus-digital-twin
 ```
 
-仓库在开源准备期间保持私有，克隆需要对应访问权限。将另行取得的资产放在仓库之外；`--asset-root` 指向下述目录的根，而不是某一个 GLB 文件：
+源码仓库已按 MIT 许可证公开，可直接克隆。将另行取得的合法资产放在仓库之外；`--asset-root` 指向下述目录的根，而不是某一个 GLB 文件：
 
 ```text
 scene-resources/
@@ -145,4 +145,4 @@ PLAYWRIGHT_MODULE=/path/to/playwright-core node tests/verify_viewer.cjs
 
 校园模型、真实运行 JSON、Blender 工程、GLB/TJS 包、课程 PPT、照片、效果渲染、平台原始证据与历史备份不属于这份源码发行树。部分素材尚未完成再分发许可核对，不能因为网页可下载或代码使用 MIT，就一并公开。使用者需自行取得并核对资产来源与许可。
 
-仓库目前保持私有，处于开源前准备阶段。公开范围、历史检查和资产授权均确认后，才能安排实际公开；本 README 不表示仓库已公开，也不表示完整平台验收完成。
+本仓库于 2026-11-04 公开发布自有查看器、相关工具与文档；Three.js 依其原 MIT 许可证提供。校园资产、完整工程和历史备份继续单独私有保管。源码开源不表示完整校园模型或森园区链路已验收通过。
