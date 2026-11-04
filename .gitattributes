@@ -1,0 +1,2 @@
+# Preserve the official Three.js distribution byte-for-byte.
+web/vendor/three/** -whitespace

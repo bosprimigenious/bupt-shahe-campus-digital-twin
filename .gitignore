@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.venv/
+node_modules/
+.artifacts/
+private-assets/
+.DS_Store
+*.log
+*.zip
+*.tar
+*.gz
+*.blend
+*.blend1
+*.glb
+*.tjs
+*.pptx
+*.dmg
