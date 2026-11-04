@@ -1,9 +1,13 @@
 """Adversarial audit fixtures are assembled at runtime, never stored as secrets."""
 from pathlib import Path
+import hashlib
+import json
+import struct
 import subprocess
 import sys
 import tempfile
 import unittest
+import zlib
 
 
 AUDIT = Path(__file__).resolve().parents[1] / "scripts" / "audit_public.py"
@@ -69,6 +73,68 @@ class PublicAuditTests(unittest.TestCase):
     def test_binary_file_is_blocked(self):
         self.write("asset.dat", b"\x00\x01binary")
         self.assert_blocked("binary_file")
+
+    def image_fixture(self, metadata=False):
+        def chunk(kind, data):
+            return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xffffffff)
+        return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
+                + (chunk(b"tEXt", b"comment\0private metadata") if metadata else b"")
+                + chunk(b"IDAT", zlib.compress(b"\0\xff\xff\xff")) + chunk(b"IEND", b""))
+
+    def reviewed_image(self, data=None, path="docs/images/example.png"):
+        data = self.image_fixture() if data is None else data
+        self.write("docs/images/example.png", data)
+        self.write("docs/images/manifest.json", json.dumps({"version": 1, "images": [
+            {"path": path, "sha256": hashlib.sha256(data).hexdigest(), "caption": "Reviewed example"}
+        ]}))
+
+    def test_only_exact_reviewed_plain_png_is_allowed(self):
+        self.reviewed_image()
+        self.assertEqual(self.audit().returncode, 0)
+        self.write("docs/images/unlisted.png", self.image_fixture())
+        self.assert_blocked("binary_file")
+
+    def test_reviewed_image_tampering_is_blocked(self):
+        self.reviewed_image()
+        self.write("docs/images/example.png", self.image_fixture() + b"extra")
+        self.assert_blocked("reviewed_image_mismatch")
+
+    def test_approved_hash_does_not_allow_metadata_non_png_or_appended_bytes(self):
+        invalid_crc = bytearray(self.image_fixture())
+        invalid_crc[29] ^= 1
+        for data in [self.image_fixture(metadata=True), b"not a PNG", self.image_fixture() + b"extra", bytes(invalid_crc)]:
+            with self.subTest(data_length=len(data)):
+                self.reviewed_image(data)
+                self.assert_blocked("reviewed_image_invalid_png")
+
+    def test_image_manifest_path_escape_and_missing_image_are_blocked(self):
+        self.reviewed_image(path="docs/images/../../outside.png")
+        self.assert_blocked("invalid_image_manifest")
+        self.reviewed_image(path="docs/images/missing.png")
+        self.assert_blocked("missing_reviewed_image")
+
+    def test_image_history_uses_the_manifest_from_each_commit(self):
+        # The exact same blob has approval now, but did not when first committed.
+        self.write("docs/images/example.png", self.image_fixture())
+        self.git("add", ".")
+        self.git("commit", "-qm", "Add unreviewed image fixture")
+        self.reviewed_image()
+        self.git("add", ".")
+        self.git("commit", "-qm", "Review image fixture")
+        self.assertEqual(self.audit().returncode, 0)
+        self.assert_blocked("binary_file", history=True)
+
+    def test_clean_reviewed_image_history_passes_and_later_changes_fail(self):
+        self.reviewed_image()
+        self.git("add", ".")
+        self.git("commit", "-qm", "Add reviewed image fixture")
+        self.assertEqual(self.audit(history=True).returncode, 0)
+        self.write("docs/images/example.png", self.image_fixture() + b"extra")
+        self.git("add", ".")
+        self.git("commit", "-qm", "Tamper with image fixture")
+        self.reviewed_image()
+        self.assertEqual(self.audit().returncode, 0)
+        self.assert_blocked("reviewed_image_mismatch", history=True)
 
     def test_model_extension_and_raw_response_path_are_blocked(self):
         self.write("assets/model.glb", "not even a real model")

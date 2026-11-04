@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "images": [
+    {
+      "path": "docs/images/campus-overview.png",
+      "sha256": "49a900cd2d9ecc70c1248dddb641d9ab71f0631589bad21b8bf4344783ae6eb7",
+      "caption": "本地查看器：校园总览与千人可视化样本"
+    },
+    {
+      "path": "docs/images/library-walkthrough.png",
+      "sha256": "32bdf534d0affac0035c825c2904696e8c7bf50ef0167ceeaf9f3cbbebccd751",
+      "caption": "本地查看器：二层馆内人物与家具近景"
+    },
+    {
+      "path": "docs/images/library-floor-five.png",
+      "sha256": "a22fd0054e4e362e47da93f6d795d1b9c9aa9c24935136195e3fe66b51022e19",
+      "caption": "本地查看器：五层筛选与人物状态"
+    },
+    {
+      "path": "docs/images/library-exploded.png",
+      "sha256": "b4d5fd9e266ea2ae66f655ff8173a570450178ce870f47ce476f43930370dafe",
+      "caption": "本地查看器：五层展开观察"
+    },
+    {
+      "path": "docs/images/library-model.png",
+      "sha256": "c6ebd43f82cf2930d143feb53d5e339ba07a0560c6218e04cba6e1a00df0745c",
+      "caption": "建模阶段离线渲染：图书馆外壳与内院"
+    }
+  ]
+}

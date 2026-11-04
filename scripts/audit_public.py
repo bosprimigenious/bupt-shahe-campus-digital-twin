@@ -9,13 +9,17 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 import fnmatch
+import hashlib
 import ipaddress
+import json
 import os
 from pathlib import Path
 import re
 import stat
+import struct
 import subprocess
 from typing import Iterable
+import zlib
 
 
 MAX_TEXT_BYTES = 32 * 1024 * 1024
@@ -59,6 +63,7 @@ TOKEN_PATTERNS = {
 }
 IP_PATTERN = re.compile(r"(?<![\w.])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![\w.])")
 NOREPLY_EMAIL = re.compile(r"(?:[0-9]+\+)?[A-Za-z0-9_.-]+@users\.noreply\.github\.com", re.I)
+IMAGE_MANIFEST = "docs/images/manifest.json"
 
 
 @dataclass(frozen=True, order=True)
@@ -157,7 +162,74 @@ def scan_text(path: str, text: str) -> list[Finding]:
     return findings
 
 
-def scan_blob(path: str, content: bytes) -> list[Finding]:
+def reviewed_images(content: bytes) -> dict[str, str]:
+    """Parse a narrow, manually reviewed documentation image inventory."""
+    value = json.loads(content)
+    if not isinstance(value, dict) or value.get("version") != 1 or not isinstance(value.get("images"), list):
+        raise ValueError("invalid image manifest")
+    images = {}
+    for item in value["images"]:
+        if not isinstance(item, dict):
+            raise ValueError("invalid image record")
+        path, digest, caption = item.get("path"), item.get("sha256"), item.get("caption")
+        if not isinstance(path, str) or not re.fullmatch(r"docs/images/[a-z0-9][a-z0-9-]*\.png", path):
+            raise ValueError("invalid image path")
+        if path in images or not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest):
+            raise ValueError("invalid image digest")
+        if not isinstance(caption, str) or not caption.strip():
+            raise ValueError("missing image caption")
+        images[path] = digest
+    return images
+
+
+def plain_png(content: bytes) -> bool:
+    """Accept only complete RGB/RGBA PNGs without metadata or appended data."""
+    if not content.startswith(b"\x89PNG\r\n\x1a\n"):
+        return False
+    offset, kinds, payload, dimensions = 8, [], bytearray(), None
+    while offset + 12 <= len(content):
+        size = struct.unpack(">I", content[offset:offset + 4])[0]
+        kind = content[offset + 4:offset + 8]
+        end = offset + 12 + size
+        if end > len(content) or kind not in {b"IHDR", b"IDAT", b"IEND"}:
+            return False
+        data = content[offset + 8:offset + 8 + size]
+        crc = struct.unpack(">I", content[offset + 8 + size:end])[0]
+        if zlib.crc32(kind + data) & 0xffffffff != crc:
+            return False
+        if kind == b"IHDR":
+            if kinds or size != 13:
+                return False
+            width, height, bits, color, compression, filtering, interlace = struct.unpack(">IIBBBBB", data)
+            if not (0 < width <= 8192 and 0 < height <= 8192) or bits != 8 or color not in {2, 6} or any((compression, filtering, interlace)):
+                return False
+            dimensions = (width, height, 3 if color == 2 else 4)
+        elif kind == b"IDAT":
+            if not kinds or kinds[-1] not in {b"IHDR", b"IDAT"}:
+                return False
+            payload.extend(data)
+        else:
+            if not kinds or kinds[-1] != b"IDAT" or size or end != len(content):
+                return False
+        kinds.append(kind)
+        offset = end
+    if offset != len(content) or not kinds or kinds[-1] != b"IEND" or dimensions is None:
+        return False
+    width, height, channels = dimensions
+    stride = width * channels + 1
+    expected = height * stride
+    if expected > 64 * 1024 * 1024:
+        return False
+    try:
+        decoder = zlib.decompressobj()
+        pixels = decoder.decompress(payload, expected + 1)
+        return (len(pixels) == expected and decoder.eof and not decoder.unused_data
+                and not decoder.unconsumed_tail and all(pixels[i] <= 4 for i in range(0, expected, stride)))
+    except zlib.error:
+        return False
+
+
+def scan_blob(path: str, content: bytes, image_digest: str | None = None) -> list[Finding]:
     findings = []
     if private_path(path):
         findings.append(Finding(path, 0, "private_artifact_path"))
@@ -165,6 +237,12 @@ def scan_blob(path: str, content: bytes) -> list[Finding]:
         findings.append(Finding(path, 0, "restricted_artifact"))
     if len(content) > MAX_TEXT_BYTES:
         return findings + [Finding(path, 0, "oversized_unreviewed_file")]
+    if image_digest is not None:
+        if hashlib.sha256(content).hexdigest() != image_digest:
+            return findings + [Finding(path, 0, "reviewed_image_mismatch")]
+        if not plain_png(content):
+            return findings + [Finding(path, 0, "reviewed_image_invalid_png")]
+        return findings
     if b"\0" in content:
         return findings + [Finding(path, 0, "binary_file")]
     try:
@@ -177,6 +255,16 @@ def scan_blob(path: str, content: bytes) -> list[Finding]:
 def scan_tree(root: Path, git: bool) -> list[Finding]:
     findings: list[Finding] = []
     tracked = tracked_paths(root) if git else set()
+    images = {}
+    manifest = root / IMAGE_MANIFEST
+    if manifest.exists() and not manifest.is_symlink():
+        try:
+            images = reviewed_images(manifest.read_bytes())
+        except (OSError, ValueError, TypeError):
+            findings.append(Finding(IMAGE_MANIFEST, 0, "invalid_image_manifest"))
+    for path in images:
+        if not (root / path).is_file():
+            findings.append(Finding(path, 0, "missing_reviewed_image"))
 
     def inaccessible(error: OSError) -> None:
         try:
@@ -206,7 +294,7 @@ def scan_tree(root: Path, git: bool) -> list[Finding]:
                 if not stat.S_ISREG(item.stat(follow_symlinks=False).st_mode):
                     findings.append(Finding(relative, 0, "special_file"))
                     continue
-                findings.extend(scan_blob(relative, item.read_bytes()))
+                findings.extend(scan_blob(relative, item.read_bytes(), images.get(relative)))
             except OSError:
                 findings.append(Finding(relative, 0, "unreadable_file"))
     return findings
@@ -240,15 +328,34 @@ def scan_history(root: Path) -> list[Finding]:
         if tree.returncode:
             findings.append(Finding(f"history/{commit}", 0, "unreadable_tree"))
             continue
+        entries = []
         for entry in tree.stdout.split(b"\0"):
             if not entry:
                 continue
             info, raw_path = entry.split(b"\t", 1)
             mode, kind, object_id = info.decode("ascii").split()
             path = os.fsdecode(raw_path)
-            if (mode, object_id, path) in seen:
+            entries.append((mode, kind, object_id, path))
+        images = {}
+        for mode, kind, object_id, path in entries:
+            if path == IMAGE_MANIFEST and mode != "120000" and kind == "blob":
+                value = run_git(root, "cat-file", "blob", object_id)
+                try:
+                    if value.returncode:
+                        raise ValueError("unreadable image manifest")
+                    images = reviewed_images(value.stdout)
+                except (ValueError, TypeError):
+                    findings.append(Finding(f"history/{commit}/{IMAGE_MANIFEST}", 0, "invalid_image_manifest"))
+        present = {path for _, _, _, path in entries}
+        for path in images.keys() - present:
+            findings.append(Finding(f"history/{commit}/{path}", 0, "missing_reviewed_image"))
+        for mode, kind, object_id, path in entries:
+            # Include this commit's image approval in the cache key: a later
+            # manifest must never retroactively approve an older binary blob.
+            key = (mode, object_id, path, images.get(path))
+            if key in seen:
                 continue
-            seen.add((mode, object_id, path))
+            seen.add(key)
             diagnostic_path = f"history/{commit}/{path}"
             if mode == "120000":
                 findings.append(Finding(diagnostic_path, 0, "symlink"))
@@ -262,7 +369,7 @@ def scan_history(root: Path) -> list[Finding]:
                     findings.append(Finding(diagnostic_path, 0, "unreadable_blob"))
                     continue
                 blobs[object_id] = value.stdout
-            findings.extend(scan_blob(diagnostic_path, blobs[object_id]))
+            findings.extend(scan_blob(diagnostic_path, blobs[object_id], images.get(path)))
     return findings
 
 
